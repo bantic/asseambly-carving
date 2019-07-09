@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Asseambly Carving</title>
+    <link
+      rel="icon"
+      href="https://assemblyscript.org/favicon.ico"
+      type="image/x-icon"
+    />
+    <meta name="viewport" content="user-scalable=0" />
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        color: #111;
+        background: #fff;
+        font-family: sans-serif;
+      }
+      body {
+        border-top: 2px solid #bc18d4;
+      }
+      h1 {
+        padding: 18px 20px 20px;
+        font-size: 12pt;
+        margin: 0;
+      }
+      a {
+        color: #111;
+        text-decoration: none;
+      }
+      a:hover {
+        color: #bc18d4;
+        text-decoration: underline;
+      }
+      canvas {
+        width: 400px;
+        height: 300px;
+        background: #100707;
+        cursor: cell;
+        user-select: none;
+        outline: 1px solid red;
+        image-rendering: optimizeSpeed;
+        image-rendering: -moz-crisp-edges;
+        image-rendering: -webkit-optimize-contrast;
+        image-rendering: -o-crisp-edges;
+        image-rendering: optimize-contrast;
+        image-rendering: crisp-edges;
+        image-rendering: pixelated;
+        -ms-interpolation-mode: nearest-neighbor;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="image-loader"></canvas>
+    <canvas id="canvas"></canvas>
+    <script>
+      'use strict';
+
+      function setupCanvas(width, height) {
+        let cnv = document.getElementById('canvas');
+        let ctx = cnv.getContext('2d');
+        cnv.width = width;
+        cnv.height = height;
+        ctx.imageSmoothingEnabled = false;
+      }
+
+      async function loadModule(memory) {
+        // Fetch and instantiate the module
+        return await fetch('build/untouched.wasm')
+          .then(response => response.arrayBuffer())
+          .then(buffer =>
+            WebAssembly.instantiate(buffer, {
+              env: {
+                memory,
+                abort: (...args) => console.log(...args),
+                trace: (...args) => console.log('trace:', ...args)
+              },
+              config: {},
+              Math
+            })
+          )
+          .catch(err => {
+            alert(
+              'Failed to load WASM: ' + err.message + ' (ad blocker, maybe?)'
+            );
+            console.log(err.stack);
+          });
+      }
+
+      (async function run() {
+        let width = 100,
+          height = 100;
+        let memory = new WebAssembly.Memory({
+          initial: Math.ceil((width * height * 4) / Math.pow(2, 16))
+        });
+        let module = await loadModule(memory);
+        testImageWithModule(module, width, height);
+        // testImageDataLocally(width, height);
+      })();
+
+      function testImageWithModule(module, width, height) {
+        let pixelColor = 0xff00cccc; // little-endian
+        module.instance.exports.writeImageData(width * height, pixelColor);
+        module.instance.exports.invert(width * height);
+        let canvas = document.getElementById('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        let imageData = new ImageData(
+          new Uint8ClampedArray(
+            module.instance.exports.memory.buffer,
+            0,
+            width * height * 4
+          ),
+          width,
+          height
+        );
+        let ctx = canvas.getContext('2d');
+        ctx.putImageData(imageData, 0, 0);
+      }
+
+      function testImageDataLocally(width, height) {
+        let canvas = document.getElementById('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        let imageData = generateImageData(width, height);
+        let ctx = canvas.getContext('2d');
+        ctx.putImageData(imageData, 0, 0);
+      }
+
+      function generateImageData(width, height) {
+        let imageData = new ImageData(width, height);
+        let dataUint32 = new Uint32Array(imageData.data.buffer);
+
+        for (let i = 0; i < dataUint32.length; i++) {
+          dataUint32[i] = 0xffff0000;
+        }
+
+        return imageData;
+      }
+
+      function viewMemory(memory) {
+        let view = new Uint32Array(memory.buffer);
+        for (let i = 0; i < 10; i++) {
+          console.log(`memory@${i}: ${view[i]}`);
+        }
+      }
+
+      function putImageDataIntoMemory(image, memory) {
+        let mem = new Uint8Array(memory.buffer);
+        let imageData = image.data;
+        mem.set(imageData.data);
+      }
+
+      function drawImageFromMemory(width, height, memory) {
+        let size = width * height;
+        let mem = new Uint32Array(memory.buffer);
+        let ctx = document.getElementById('canvas').getContext('2d');
+        let imageData = ctx.createImageData(width, height);
+        let argb = new Uint32Array(imageData.data.buffer);
+        argb.set(mem.subarray(0, size));
+        ctx.putImageData(imageData, 0, 0);
+      }
+      // var mem = new Uint32Array(memory.buffer);
+
+      // // Keep rendering the output at [size, 2*size]
+      // var imageData = ctx.createImageData(width, height);
+      // var argb = new Uint32Array(imageData.data.buffer);
+      // (function render() {
+      //   requestAnimationFrame(render);
+      //   argb.set(mem.subarray(size, size + size)); // copy output to image buffer
+      //   ctx.putImageData(imageData, 0, 0); // apply image buffer
+      // })();
+    </script>
+  </body>
+</html>
