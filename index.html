@@ -13,7 +13,6 @@
       body {
         height: 100%;
         margin: 0;
-        overflow: hidden;
         color: #111;
         background: #fff;
         font-family: sans-serif;
@@ -35,8 +34,6 @@
         text-decoration: underline;
       }
       canvas {
-        width: 400px;
-        height: 300px;
         background: #100707;
         cursor: cell;
         user-select: none;
@@ -57,6 +54,8 @@
     <canvas id="canvas"></canvas>
     <script>
       'use strict';
+
+      const IMAGE_URL = 'pic.png';
 
       function setupCanvas(width, height) {
         let cnv = document.getElementById('canvas');
@@ -90,51 +89,93 @@
       }
 
       (async function run() {
-        let width = 100,
-          height = 100;
-        let memory = new WebAssembly.Memory({
-          initial: Math.ceil((width * height * 4) / Math.pow(2, 16))
-        });
-        let module = await loadModule(memory);
-        testImageWithModule(module, width, height);
-        // testImageDataLocally(width, height);
+        await testInvertingImageWithWasm(IMAGE_URL);
+        // await testDrawingPixelDataToCanvasWasm(0xff0000ff, 100, 100);
+        // await testImageDataLocally(0xffff0000, 100, 100);
       })();
 
-      function testImageWithModule(module, width, height) {
-        let pixelColor = 0xff00cccc; // little-endian
-        module.instance.exports.writeImageData(width * height, pixelColor);
+      // 1. Loads the image from the given URL,
+      // 2. gets the pixel data from the image
+      // 3. load the pixel data into the WebAssembly.Memory
+      // 4. call the wasm `invert` method which inverts the data in the memory
+      // 5. draw the memory into a canvas
+      async function testInvertingImageWithWasm(imageUrl) {
+        let loadedImageData = await loadImage(IMAGE_URL);
+        let { width, height } = loadedImageData;
+        let memory = new WebAssembly.Memory({
+          // 4 bytes per pixel, width*height pixels, 2^16 bytes per Wasm memory page
+          initial: Math.ceil((width * height * 4) / (1 << 16))
+        });
+        let module = await loadModule(memory);
+        putImageDataIntoMemory(loadedImageData.data, memory);
         module.instance.exports.invert(width * height);
+        let imageData = getImageDataFromWasmMemory(
+          module.instance.exports.memory,
+          width,
+          height
+        );
+        drawImageDataIntoCanvas(imageData, width, height);
+      }
+
+      function drawImageDataIntoCanvas(imageData, width, height) {
         let canvas = document.getElementById('canvas');
         canvas.width = width;
         canvas.height = height;
-        let imageData = new ImageData(
-          new Uint8ClampedArray(
-            module.instance.exports.memory.buffer,
-            0,
-            width * height * 4
+        let ctx = canvas.getContext('2d');
+        ctx.putImageData(imageData, 0, 0);
+      }
+
+      function getImageDataFromWasmMemory(memory, width, height) {
+        return new ImageData(
+          new Uint8ClampedArray(memory.buffer, 0, width * height * 4),
+          width,
+          height
+        );
+      }
+
+      function createWasmMemory(bytes) {
+        return new WebAssembly.Memory({
+          initial: Math.ceil(bytes / (1 << 16))
+        });
+      }
+
+      // pixelColor should be little-endian 32-bit integer, ABGR
+      async function testDrawingPixelDataToCanvasWasm(
+        pixelColor = 0xff00cccc,
+        width = 100,
+        height = 100
+      ) {
+        let module = await loadModule(createWasmMemory(width * height * 4));
+        module.instance.exports.writeImageData(width * height, pixelColor);
+        drawImageDataIntoCanvas(
+          getImageDataFromWasmMemory(
+            module.instance.exports.memory,
+            width,
+            height
           ),
           width,
           height
         );
-        let ctx = canvas.getContext('2d');
-        ctx.putImageData(imageData, 0, 0);
       }
 
-      function testImageDataLocally(width, height) {
-        let canvas = document.getElementById('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        let imageData = generateImageData(width, height);
-        let ctx = canvas.getContext('2d');
-        ctx.putImageData(imageData, 0, 0);
+      function testImageDataLocally(
+        pixelColor = 0xff00ff00,
+        width = 100,
+        height = 100
+      ) {
+        drawImageDataIntoCanvas(
+          generateImageData(pixelColor, width, height),
+          width,
+          height
+        );
       }
 
-      function generateImageData(width, height) {
+      function generateImageData(pixelColor, width, height) {
         let imageData = new ImageData(width, height);
         let dataUint32 = new Uint32Array(imageData.data.buffer);
 
         for (let i = 0; i < dataUint32.length; i++) {
-          dataUint32[i] = 0xffff0000;
+          dataUint32[i] = pixelColor;
         }
 
         return imageData;
@@ -147,9 +188,8 @@
         }
       }
 
-      function putImageDataIntoMemory(image, memory) {
+      function putImageDataIntoMemory(imageData, memory) {
         let mem = new Uint8Array(memory.buffer);
-        let imageData = image.data;
         mem.set(imageData.data);
       }
 
@@ -162,16 +202,37 @@
         argb.set(mem.subarray(0, size));
         ctx.putImageData(imageData, 0, 0);
       }
-      // var mem = new Uint32Array(memory.buffer);
 
-      // // Keep rendering the output at [size, 2*size]
-      // var imageData = ctx.createImageData(width, height);
-      // var argb = new Uint32Array(imageData.data.buffer);
-      // (function render() {
-      //   requestAnimationFrame(render);
-      //   argb.set(mem.subarray(size, size + size)); // copy output to image buffer
-      //   ctx.putImageData(imageData, 0, 0); // apply image buffer
-      // })();
+      async function loadImage(url) {
+        let image = document.createElement('img');
+        image.setAttribute('src', url);
+        image.style = 'display: none';
+        let result = new Promise((resolve, reject) => {
+          image.onload = e => {
+            console.log('done w image', e);
+            resolve(image);
+          };
+          image.onerror = e => reject(e);
+        })
+          .then(image => {
+            let { width, height } = image;
+            let loaderCanvas = document.getElementById('image-loader');
+            let ctx = loaderCanvas.getContext('2d');
+            loaderCanvas.width = width;
+            loaderCanvas.height = height;
+            ctx.drawImage(image, 0, 0, width, height);
+            return {
+              width,
+              height,
+              data: ctx.getImageData(0, 0, width, height)
+            };
+          })
+          .finally(() => {
+            document.body.removeChild(image);
+          });
+        document.body.appendChild(image);
+        return result;
+      }
     </script>
   </body>
 </html>
