@@ -32,9 +32,9 @@ function pixelVal(x: u32, y: u32, width: u32): u32 {
 
 function energyDiff(left: u32, right: u32, up: u32, down: u32): u32 {
   // pixel data is little-endian: ABGR
-  let xDiffR = (left & 0xff) - (right & 0xff);
-  let xDiffG = ((left >> 8) & 0xff) - ((right >> 8) & 0xff);
-  let xDiffB = ((left >> 16) & 0xff) - ((right >> 16) & 0xff);
+  let xDiffR = (left & 0xff) - (right & 0xff); // rightmost byte
+  let xDiffG = ((left >> 8) & 0xff) - ((right >> 8) & 0xff); // 2nd-rightmost byte
+  let xDiffB = ((left >> 16) & 0xff) - ((right >> 16) & 0xff); // 3rd-rightmost byte
 
   let yDiffR = (up & 0xff) - (down & 0xff);
   let yDiffG = ((up >> 8) & 0xff) - ((down >> 8) & 0xff);
