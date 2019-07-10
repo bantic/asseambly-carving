@@ -89,10 +89,30 @@
       }
 
       (async function run() {
-        await testInvertingImageWithWasm(IMAGE_URL);
-        // await testDrawingPixelDataToCanvasWasm(0xff0000ff, 100, 100);
-        // await testImageDataLocally(0xffff0000, 100, 100);
+        await testEnergizingImageWithWasm(IMAGE_URL); // loads image on left, draws energy values on right
+        // await testInvertingImageWithWasm(IMAGE_URL); // loads the image on left, then inverts it on right
+        // await testDrawingPixelDataToCanvasWasm(0xff0000ff, 100, 100); // draws a red square
+        // await testImageDataLocally(0xffff0000, 100, 100); // draws a blue square
       })();
+
+      async function testEnergizingImageWithWasm(imageUrl) {
+        let loadedImageData = await loadImage(IMAGE_URL);
+        let { width, height } = loadedImageData;
+        let doubleMemory = true;
+        let memory = createWasmMemory(width * height * 4, doubleMemory);
+        let module = await loadModule(memory);
+        putImageDataIntoMemory(loadedImageData.data, memory);
+        module.instance.exports.energize(width, height);
+        let size = width * height;
+        let mem = new Uint32Array(memory.buffer);
+        mem.copyWithin(0, size, size + size);
+        let imageData = getImageDataFromWasmMemory(
+          module.instance.exports.memory,
+          width,
+          height
+        );
+        drawImageDataIntoCanvas(imageData, width, height);
+      }
 
       // 1. Loads the image from the given URL,
       // 2. gets the pixel data from the image
@@ -102,10 +122,7 @@
       async function testInvertingImageWithWasm(imageUrl) {
         let loadedImageData = await loadImage(IMAGE_URL);
         let { width, height } = loadedImageData;
-        let memory = new WebAssembly.Memory({
-          // 4 bytes per pixel, width*height pixels, 2^16 bytes per Wasm memory page
-          initial: Math.ceil((width * height * 4) / (1 << 16))
-        });
+        let memory = createWasmMemory(width * height * 4);
         let module = await loadModule(memory);
         putImageDataIntoMemory(loadedImageData.data, memory);
         module.instance.exports.invert(width * height);
@@ -133,9 +150,11 @@
         );
       }
 
-      function createWasmMemory(bytes) {
+      function createWasmMemory(bytes, double = false) {
+        // TODO: For some reason, just doubling by multiplying by 2 is resulting in memory
+        // access out of bounds issues. But multiplying by 3 gives enough room... :/
         return new WebAssembly.Memory({
-          initial: Math.ceil(bytes / (1 << 16))
+          initial: (double ? 3 : 1) * Math.ceil(bytes / (1 << 16))
         });
       }
 
