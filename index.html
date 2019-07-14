@@ -65,6 +65,17 @@
         ctx.imageSmoothingEnabled = false;
       }
 
+      let _memory;
+      function getMemory() {
+        if (!_memory) {
+          throw new Error('Cannot get memory');
+        }
+        return _memory;
+      }
+      function setMemory(memory) {
+        _memory = memory;
+      }
+
       async function loadModule(memory) {
         // Fetch and instantiate the module
         return await fetch('build/untouched.wasm')
@@ -74,7 +85,14 @@
               env: {
                 memory,
                 abort: (...args) => console.log(...args),
-                trace: (...args) => console.log('trace:', ...args)
+                trace: function(msg, n, ...args) {
+                  console.log(
+                    'trace: ' +
+                      getString(msg) +
+                      ' ' +
+                      args.slice(0, n).join(' ')
+                  );
+                }
               },
               config: {},
               Math
@@ -86,6 +104,32 @@
             );
             console.log(err.stack);
           });
+      }
+
+      // See:https://github.com/AssemblyScript/assemblyscript/blob/678593d7bd8ee9573eadbd43e3635e0bc0b8e15e/lib/loader/index.js#L41-L53
+      function getString(ptr) {
+        const SIZE_OFFSET = -4;
+        const CHUNKSIZE = 1024;
+        if (!ptr) return 'null';
+
+        let mem = getMemory();
+        let u16 = new Uint16Array(mem.buffer);
+        let u32 = new Uint32Array(mem.buffer);
+
+        // (ptr+SIZE_OFFSET) >>> 2: The location of the 32-bit length value
+        // length is in bytes, so do >>> 1 which is / 2, to get the length in characters,
+        // since string is UTF-16 and each char is encoded as 2 bytes
+        let length = u32[(ptr + SIZE_OFFSET) >>> 2] >>> 1;
+        if (length > CHUNKSIZE) {
+          // Abort if the length is too long to decode in a single chunk
+          // todo: implement this later
+          throw new Error(`Length is too long (unimplemented): ${length}`);
+        }
+        let offset = ptr >>> 1; // The u16 offset
+        return String.fromCharCode.apply(
+          String,
+          u16.subarray(offset, offset + length)
+        );
       }
 
       (async function run() {
@@ -153,9 +197,11 @@
       function createWasmMemory(bytes, double = false) {
         // TODO: For some reason, just doubling by multiplying by 2 is resulting in memory
         // access out of bounds issues. But multiplying by 3 gives enough room... :/
-        return new WebAssembly.Memory({
+        let mem = new WebAssembly.Memory({
           initial: (double ? 3 : 1) * Math.ceil(bytes / (1 << 16))
         });
+        setMemory(mem);
+        return mem;
       }
 
       // pixelColor should be little-endian 32-bit integer, ABGR
