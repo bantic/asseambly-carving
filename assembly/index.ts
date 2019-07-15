@@ -1,6 +1,30 @@
 // The entry file of your WebAssembly module.
 const fullAlpha = 0xff000000;
 
+var width: u32;
+var height: u32;
+const bytesPerPixel: u32 = 4; // r, g, b and a
+var pixelOffset: u32;
+var energyOffset: u32;
+var costOffset: u32;
+export function init(w: u32, h: u32): u32 {
+  width = w;
+  height = h;
+
+  let byteSize = width * height * bytesPerPixel;
+
+  pixelOffset = __alloc(byteSize, idof<Uint8Array>());
+  energyOffset = pixelOffset + __alloc(byteSize, idof<Uint8Array>());
+  costOffset =
+    pixelOffset + energyOffset + __alloc(byteSize, idof<Uint8Array>());
+  trace('3 init');
+  return pixelOffset;
+}
+
+export function sayHi(a: u32): void {
+  trace('hello', 1, a);
+}
+
 export function writeImageData(size: u32, color: u32): void {
   for (let i: u32 = 0; i < size; i++) {
     store<u32>(i << 2, color);
@@ -30,50 +54,121 @@ function pixelVal(x: u32, y: u32, width: u32): u32 {
   return load<u32>(pixelIdx(x, y, width));
 }
 
-function energyDiff(left: u32, right: u32, up: u32, down: u32): u32 {
-  // pixel data is little-endian: ABGR
-  let xDiffR = (left & 0xff) - (right & 0xff); // rightmost byte
-  let xDiffG = ((left >> 8) & 0xff) - ((right >> 8) & 0xff); // 2nd-rightmost byte
-  let xDiffB = ((left >> 16) & 0xff) - ((right >> 16) & 0xff); // 3rd-rightmost byte
-
-  let yDiffR = (up & 0xff) - (down & 0xff);
-  let yDiffG = ((up >> 8) & 0xff) - ((down >> 8) & 0xff);
-  let yDiffB = ((up >> 16) & 0xff) - ((down >> 16) & 0xff);
-
-  return (
-    xDiffR * xDiffR +
-    xDiffG * xDiffG +
-    xDiffB * xDiffB +
-    yDiffR * yDiffR +
-    yDiffG * yDiffG +
-    yDiffB * yDiffB
-  );
+// @inline
+function _pixelIdx(x: u32, y: u32): u32 {
+  return pixelOffset + (y * width + x) * bytesPerPixel;
 }
 
-export function energize(width: u32, height: u32): void {
-  let maxEnergy = 255 * 255 * 3 * 2; // 255^2 max diff per color channel * 3 channels * two directions (left-right, up-down)
-  let size = width * height;
+function getPixel(x: u32, y: u32): u32 {
+  return load<u32>(_pixelIdx(x, y));
+}
+
+function setPixel(x: u32, y: u32, value: u32): void {
+  store<u32>(_pixelIdx(x, y), value);
+}
+
+function _energyIdx(x: u32, y: u32): u32 {
+  return energyOffset + (y * width + x) * bytesPerPixel;
+}
+
+function setEnergy(x: u32, y: u32, value: u32): void {
+  store<u32>(_energyIdx(x, y), value);
+}
+
+function getEnergy(x: u32, y: u32): u32 {
+  return load<u32>(_energyIdx(x, y));
+}
+
+function _costIdx(x: u32, y: u32): u32 {
+  return costOffset + (y * width + x) * bytesPerPixel;
+}
+
+function setCost(x: u32, y: u32, value: u32): void {
+  store<u32>(_costIdx(x, y), value);
+}
+
+function getCost(x: u32, y: u32): u32 {
+  return load<u32>(_costIdx(x, y));
+}
+
+function energyDiff(a: u32, b: u32): u32 {
+  // pixel data is little-endian: ABGR
+  let diffR = (a & 0xff) - (b & 0xff); // rightmost byte
+  let diffG = ((a >> 8) & 0xff) - ((b >> 8) & 0xff); // 2nd-rightmost byte
+  let diffB = ((a >> 16) & 0xff) - ((b >> 16) & 0xff); // 3rd-rightmost byte
+
+  return diffR * diffR + diffG * diffG + diffB * diffB;
+}
+
+export function calculateEnergyMap(): void {
+  trace('calculateEnergyMap');
+  assert(width > 0, 'Cannot calculate energy map before calling init');
+  assert(height > 0, 'Cannot calculate energy map before calling init');
 
   for (let x: u32 = 0; x < width; x++) {
-    for (let y: u32 = 0; y < width; y++) {
+    for (let y: u32 = 0; y < height; y++) {
       let leftX = x === 0 ? width - 1 : x - 1;
       let rightX = x === width - 1 ? 0 : x + 1;
       let upY = y === 0 ? height - 1 : y - 1;
       let downY = y === height - 1 ? 0 : y + 1;
 
-      let leftVal = pixelVal(leftX, y, width);
-      let rightVal = pixelVal(rightX, y, width);
-      let upVal = pixelVal(x, upY, width);
-      let downVal = pixelVal(x, downY, width);
-
-      let energy = energyDiff(leftVal, rightVal, upVal, downVal);
-      let normalizedEnergy = (255 * energy) / maxEnergy; // single-channel, 0-255 value
-      let pixelColor =
-        fullAlpha | // A
-        (normalizedEnergy << 8) | // B
-        (normalizedEnergy << 16) | // G
-        (normalizedEnergy << 24); // R
-      store<u32>(outPixelIdx(x, y, width, size), pixelColor);
+      let xEnergy = energyDiff(getPixel(leftX, y), getPixel(rightX, y));
+      let yEnergy = energyDiff(getPixel(x, upY), getPixel(x, downY));
+      let energy = xEnergy + yEnergy;
+      setEnergy(x, y, energy);
     }
+  }
+}
+
+/**
+ * This step is implemented with dynamic programming. The value of each pixel
+ * is equal to its corresponding value in the energy map added to the minimum
+ * new neighbor energy introduced by removing one of its three top neighbors
+ * (top-left, top-center, and top-right)
+ */
+export function calculateCostMap(): void {
+  trace('calculateCostMap');
+  assert(width > 0, 'Cannot calculate energy map before calling init');
+  assert(height > 0, 'Cannot calculate energy map before calling init');
+
+  for (let x: u32 = 0; x < width; x++) {
+    for (let y: u32 = 0; y < height; y++) {
+      let energy = getEnergy(x, y);
+      if (y === 0) {
+        setCost(x, y, energy);
+      } else {
+        let minPrevEnergy = getEnergy(x, y - 1);
+        if (x > 0) {
+          minPrevEnergy = min(minPrevEnergy, getEnergy(x - 1, y - 1));
+        }
+        if (x < width - 1) {
+          minPrevEnergy = min(minPrevEnergy, getEnergy(x + 1, y - 1));
+        }
+        setCost(x, y, energy + minPrevEnergy);
+      }
+    }
+  }
+}
+
+export function findSeam(): void {
+  trace('findSeam');
+  calculateEnergyMap();
+  calculateCostMap();
+  let seam = Array.create<u32>(height);
+  for (let y: u32 = height - 1; y > 0; y--) {
+    let minX: u32 = 0;
+    let minCost: u32 = 0;
+    for (let x: u32 = 0; x < width; x++) {
+      let cost = getCost(x, y);
+      if (minCost === 0) {
+        minCost = cost;
+      }
+      if (cost < minCost) {
+        minCost = cost;
+        minX = x;
+      }
+    }
+    trace('Min cost row Y is at X, (value: C)', 3, y, minX, minCost);
+    seam[y] = minX;
   }
 }

@@ -65,15 +65,15 @@
         ctx.imageSmoothingEnabled = false;
       }
 
-      let _memory;
       function getMemory() {
-        if (!_memory) {
-          throw new Error('Cannot get memory');
+        if (!_module) {
+          throw new Error('Cannot get memory, no module');
         }
-        return _memory;
+        return _module.instance.exports.memory;
       }
-      function setMemory(memory) {
-        _memory = memory;
+      let _module = null;
+      function setModule(m) {
+        _module = m;
       }
 
       async function loadModule(memory) {
@@ -84,7 +84,13 @@
             WebAssembly.instantiate(buffer, {
               env: {
                 memory,
-                abort: (...args) => console.log(...args),
+                abort: (msg, file, line, col) => {
+                  console.log(
+                    'ABORT',
+                    getString(msg),
+                    ` at ${getString(file)}:${line}:${col}`
+                  );
+                },
                 trace: function(msg, n, ...args) {
                   console.log(
                     'trace: ' +
@@ -98,6 +104,10 @@
               Math
             })
           )
+          .then(m => {
+            setModule(m);
+            return m;
+          })
           .catch(err => {
             alert(
               'Failed to load WASM: ' + err.message + ' (ad blocker, maybe?)'
@@ -106,38 +116,70 @@
           });
       }
 
-      // See:https://github.com/AssemblyScript/assemblyscript/blob/678593d7bd8ee9573eadbd43e3635e0bc0b8e15e/lib/loader/index.js#L41-L53
-      function getString(ptr) {
+      function getStringImpl(U32, U16, ref) {
         const SIZE_OFFSET = -4;
         const CHUNKSIZE = 1024;
+        var length = U32[(ref + SIZE_OFFSET) >>> 2] >>> 1;
+        var offset = ref >>> 1;
+        if (length <= CHUNKSIZE)
+          return String.fromCharCode.apply(
+            String,
+            U16.subarray(offset, offset + length)
+          );
+        const parts = [];
+        do {
+          const last = U16[offset + CHUNKSIZE - 1];
+          const size =
+            last >= 0xd800 && last < 0xdc00 ? CHUNKSIZE - 1 : CHUNKSIZE;
+          parts.push(
+            String.fromCharCode.apply(
+              String,
+              U16.subarray(offset, (offset += size))
+            )
+          );
+          length -= size;
+        } while (length > CHUNKSIZE);
+        return (
+          parts.join('') +
+          String.fromCharCode.apply(
+            String,
+            U16.subarray(offset, offset + length)
+          )
+        );
+      }
+
+      // See:https://github.com/AssemblyScript/assemblyscript/blob/678593d7bd8ee9573eadbd43e3635e0bc0b8e15e/lib/loader/index.js#L41-L53
+      function getString(ptr) {
         if (!ptr) return 'null';
 
         let mem = getMemory();
         let u16 = new Uint16Array(mem.buffer);
         let u32 = new Uint32Array(mem.buffer);
-
-        // (ptr+SIZE_OFFSET) >>> 2: The location of the 32-bit length value
-        // length is in bytes, so do >>> 1 which is / 2, to get the length in characters,
-        // since string is UTF-16 and each char is encoded as 2 bytes
-        let length = u32[(ptr + SIZE_OFFSET) >>> 2] >>> 1;
-        if (length > CHUNKSIZE) {
-          // Abort if the length is too long to decode in a single chunk
-          // todo: implement this later
-          throw new Error(`Length is too long (unimplemented): ${length}`);
-        }
-        let offset = ptr >>> 1; // The u16 offset
-        return String.fromCharCode.apply(
-          String,
-          u16.subarray(offset, offset + length)
-        );
+        return getStringImpl(u32, u16, ptr);
       }
 
       (async function run() {
-        await testEnergizingImageWithWasm(IMAGE_URL); // loads image on left, draws energy values on right
+        await testFindSeamWithWasm(IMAGE_URL);
+        // await testEnergizingImageWithWasm(IMAGE_URL); // loads image on left, draws energy values on right
         // await testInvertingImageWithWasm(IMAGE_URL); // loads the image on left, then inverts it on right
         // await testDrawingPixelDataToCanvasWasm(0xff0000ff, 100, 100); // draws a red square
         // await testImageDataLocally(0xffff0000, 100, 100); // draws a blue square
       })();
+
+      async function testFindSeamWithWasm(imageUrl) {
+        let loadedImageData = await loadImage(IMAGE_URL);
+        let { width, height } = loadedImageData;
+        let imageBytes = width * height * 4;
+        let memory = createWasmMemory(4 * imageBytes); // plenty of memory...
+        let module = await loadModule(memory);
+        let pixelsOffset = module.instance.exports.init(width, height);
+        module.instance.exports.sayHi(1);
+        module.instance.exports.sayHi(2);
+        putImageDataIntoMemory(loadedImageData.data, getMemory(), pixelsOffset);
+        module.instance.exports.sayHi(3);
+        module.instance.exports.findSeam();
+        module.instance.exports.sayHi(4);
+      }
 
       async function testEnergizingImageWithWasm(imageUrl) {
         let loadedImageData = await loadImage(IMAGE_URL);
@@ -200,7 +242,6 @@
         let mem = new WebAssembly.Memory({
           initial: (double ? 3 : 1) * Math.ceil(bytes / (1 << 16))
         });
-        setMemory(mem);
         return mem;
       }
 
@@ -253,8 +294,8 @@
         }
       }
 
-      function putImageDataIntoMemory(imageData, memory) {
-        let mem = new Uint8Array(memory.buffer);
+      function putImageDataIntoMemory(imageData, memory, offset = 0) {
+        let mem = new Uint8Array(memory.buffer, offset);
         mem.set(imageData.data);
       }
 
@@ -274,7 +315,6 @@
         image.style = 'display: none';
         let result = new Promise((resolve, reject) => {
           image.onload = e => {
-            console.log('done w image', e);
             resolve(image);
           };
           image.onerror = e => reject(e);
