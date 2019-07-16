@@ -1,6 +1,7 @@
 'use strict';
 
 const IMAGE_URL = 'pic.png';
+// const IMAGE_URL = 'pic2.png';
 
 function setupCanvas(width, height) {
   let cnv = document.getElementById('canvas');
@@ -107,7 +108,28 @@ async function testFindSeamWithWasm(imageUrl) {
   let pixelsOffset = module.instance.exports.init(width, height);
   putImageDataIntoMemory(loadedImageData.data, getMemory(), pixelsOffset);
   let results = module.instance.exports.findSeam();
-  debugger;
+  let seamArray = getArrayView(
+    results,
+    getMemory(),
+    module.instance.exports.__rtti_base.value
+  );
+  decorateCanvasWithSeam(seamArray);
+}
+
+function decorateCanvasWithSeam(seamArray) {
+  let canvas = document.getElementById('image-loader');
+  let ctx = canvas.getContext('2d');
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = 'red';
+  ctx.beginPath();
+  seamArray.forEach((x, y) => {
+    if (y === 0) {
+      ctx.moveTo(x, y);
+    } else {
+      ctx.lineTo(x, y);
+    }
+  });
+  ctx.stroke();
 }
 
 async function testEnergizingImageWithWasm(imageUrl) {

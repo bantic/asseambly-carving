@@ -155,7 +155,7 @@ export function findSeam(): u32[] {
   let minCost: u32 = MAX_COST;
   let curMinX: u32 = 0;
 
-  for (let y: u32 = height - 1; y > 0; y--) {
+  for (let y: isize = height - 1; y >= 0; y--) {
     // last row, work upwards from here
     if (y === height - 1) {
       for (let x: u32 = 0; x < width; x++) {
@@ -197,12 +197,12 @@ export function findSeam(): u32[] {
     }
 
     trace('curMinX, y, cost', 3, curMinX, y, minCost);
-    if (y < height - 1) {
-      assert(
-        abs(max(seam[y + 1], curMinX) - min(seam[y + 1], curMinX)) <= 1,
-        'curMinX should not change by more than 1'
-      );
-    }
+    // if (y < height - 1) {
+    //   assert(
+    //     abs(max(seam[y + 1], curMinX) - min(seam[y + 1], curMinX)) <= 1,
+    //     'curMinX should not change by more than 1'
+    //   );
+    // }
     seam[y] = curMinX;
   }
   return seam;
