@@ -166,57 +166,29 @@ export function findSeam(): u32[] {
         }
       }
     } else {
-      let neighborCount = 1;
-      if (curMinX > 0) {
-        neighborCount++;
-      }
-      if (curMinX < width - 1) {
-        neighborCount++;
-      }
-      trace('inner curMinX, y, neighborCount', 3, curMinX, y, neighborCount);
+      let neighborCount =
+        1 + (curMinX > 0 ? 1 : 0) + (curMinX < width - 1 ? 1 : 0);
       let neighborXs = Array.create<u32>(neighborCount);
       let neighborCosts = Array.create<u32>(neighborCount);
       let neighborIdx = 0;
       if (curMinX > 0) {
         neighborXs[neighborIdx] = curMinX - 1;
         neighborCosts[neighborIdx] = getCost(curMinX - 1, y);
-        trace(
-          'inner A neighborX, neighborCost, neighborIdx',
-          3,
-          neighborXs[neighborIdx],
-          neighborCosts[neighborIdx],
-          neighborIdx
-        );
         neighborIdx++;
       }
       neighborXs[neighborIdx] = curMinX;
       neighborCosts[neighborIdx] = getCost(curMinX, y);
-      trace(
-        'inner B neighborX, neighborCost, neighborIdx',
-        3,
-        neighborXs[neighborIdx],
-        neighborCosts[neighborIdx],
-        neighborIdx
-      );
       neighborIdx++;
 
       if (curMinX < width - 1) {
         neighborXs[neighborIdx] = curMinX + 1;
         neighborCosts[neighborIdx] = getCost(curMinX + 1, y);
-        trace(
-          'inner C neighborX, neighborCost, neighborIdx',
-          3,
-          neighborXs[neighborIdx],
-          neighborCosts[neighborIdx],
-          neighborIdx
-        );
         neighborIdx++;
       }
 
       minCost = MAX_COST;
       for (let i = 0; i < neighborXs.length; i++) {
         let cost = neighborCosts[i];
-        trace('Y, i, cmp', 4, y, i, cost, minCost);
         if (cost < minCost) {
           minCost = cost;
           curMinX = neighborXs[i];
@@ -225,6 +197,12 @@ export function findSeam(): u32[] {
     }
 
     trace('curMinX, y, cost', 3, curMinX, y, minCost);
+    if (y < height - 1) {
+      assert(
+        abs(max(seam[y + 1], curMinX) - min(seam[y + 1], curMinX)) <= 1,
+        'curMinX should not change by more than 1'
+      );
+    }
     seam[y] = curMinX;
   }
   return seam;
