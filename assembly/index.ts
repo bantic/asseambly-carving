@@ -7,6 +7,7 @@ const bytesPerPixel: u32 = 4; // r, g, b and a
 var pixelOffset: u32;
 var energyOffset: u32;
 var costOffset: u32;
+const MAX_COST: u32 = 255 * 255 * 3 * 2; // 255^2 per channel * 3 channels * 2 axes (x and y)
 export function init(w: u32, h: u32): u32 {
   width = w;
   height = h;
@@ -17,12 +18,8 @@ export function init(w: u32, h: u32): u32 {
   energyOffset = pixelOffset + __alloc(byteSize, idof<Uint8Array>());
   costOffset =
     pixelOffset + energyOffset + __alloc(byteSize, idof<Uint8Array>());
-  trace('3 init');
+  trace('offsets:', 3, pixelOffset, energyOffset, costOffset);
   return pixelOffset;
-}
-
-export function sayHi(a: u32): void {
-  trace('hello', 1, a);
 }
 
 export function writeImageData(size: u32, color: u32): void {
@@ -150,25 +147,85 @@ export function calculateCostMap(): void {
   }
 }
 
-export function findSeam(): void {
+export function findSeam(): u32[] {
   trace('findSeam');
   calculateEnergyMap();
   calculateCostMap();
   let seam = Array.create<u32>(height);
+  let minCost: u32 = MAX_COST;
+  let curMinX: u32 = 0;
+
   for (let y: u32 = height - 1; y > 0; y--) {
-    let minX: u32 = 0;
-    let minCost: u32 = 0;
-    for (let x: u32 = 0; x < width; x++) {
-      let cost = getCost(x, y);
-      if (minCost === 0) {
-        minCost = cost;
+    // last row, work upwards from here
+    if (y === height - 1) {
+      for (let x: u32 = 0; x < width; x++) {
+        let cost = getCost(x, y);
+        if (cost < minCost) {
+          minCost = cost;
+          curMinX = x;
+        }
       }
-      if (cost < minCost) {
-        minCost = cost;
-        minX = x;
+    } else {
+      let neighborCount = 1;
+      if (curMinX > 0) {
+        neighborCount++;
+      }
+      if (curMinX < width - 1) {
+        neighborCount++;
+      }
+      trace('inner curMinX, y, neighborCount', 3, curMinX, y, neighborCount);
+      let neighborXs = Array.create<u32>(neighborCount);
+      let neighborCosts = Array.create<u32>(neighborCount);
+      let neighborIdx = 0;
+      if (curMinX > 0) {
+        neighborXs[neighborIdx] = curMinX - 1;
+        neighborCosts[neighborIdx] = getCost(curMinX - 1, y);
+        trace(
+          'inner A neighborX, neighborCost, neighborIdx',
+          3,
+          neighborXs[neighborIdx],
+          neighborCosts[neighborIdx],
+          neighborIdx
+        );
+        neighborIdx++;
+      }
+      neighborXs[neighborIdx] = curMinX;
+      neighborCosts[neighborIdx] = getCost(curMinX, y);
+      trace(
+        'inner B neighborX, neighborCost, neighborIdx',
+        3,
+        neighborXs[neighborIdx],
+        neighborCosts[neighborIdx],
+        neighborIdx
+      );
+      neighborIdx++;
+
+      if (curMinX < width - 1) {
+        neighborXs[neighborIdx] = curMinX + 1;
+        neighborCosts[neighborIdx] = getCost(curMinX + 1, y);
+        trace(
+          'inner C neighborX, neighborCost, neighborIdx',
+          3,
+          neighborXs[neighborIdx],
+          neighborCosts[neighborIdx],
+          neighborIdx
+        );
+        neighborIdx++;
+      }
+
+      minCost = MAX_COST;
+      for (let i = 0; i < neighborXs.length; i++) {
+        let cost = neighborCosts[i];
+        trace('Y, i, cmp', 4, y, i, cost, minCost);
+        if (cost < minCost) {
+          minCost = cost;
+          curMinX = neighborXs[i];
+        }
       }
     }
-    trace('Min cost row Y is at X, (value: C)', 3, y, minX, minCost);
-    seam[y] = minX;
+
+    trace('curMinX, y, cost', 3, curMinX, y, minCost);
+    seam[y] = curMinX;
   }
+  return seam;
 }
